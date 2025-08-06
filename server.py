@@ -11,7 +11,3 @@ def upload_image():
     image = request.files['image']
     print(f"[RECEIVED] {image.filename}")
     return "이미지 수신 완료!"
-
-if __name__ == '__main__':
-    app.run()
-
