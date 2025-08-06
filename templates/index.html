@@ -1,0 +1,13 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>YOLO Flask</title>
+</head>
+<body>
+    <h1>이미지 업로드</h1>
+    <form action="/predict" method="post" enctype="multipart/form-data">
+        <input type="file" name="image" required>
+        <button type="submit">업로드</button>
+    </form>
+</body>
+</html>
