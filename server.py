@@ -1,17 +1,17 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request
 
 app = Flask(__name__)
 
-@app.route('/ping', methods=['GET'])
-def ping():
-    return "pong"
+@app.route('/')
+def index():
+    return "서버 연결 성공!"
 
-@app.route('/receive', methods=['POST'])
-def receive():
-    if 'image' not in request.files:
-        return jsonify({'error': 'No image uploaded'}), 400
-    print("📷 이미지 수신 완료")
-    return jsonify({'status': 'received'}), 200
+@app.route('/upload', methods=['POST'])
+def upload_image():
+    image = request.files['image']
+    print(f"[RECEIVED] {image.filename}")
+    return "이미지 수신 완료!"
 
 if __name__ == '__main__':
     app.run()
+
