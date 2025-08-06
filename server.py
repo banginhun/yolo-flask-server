@@ -1,13 +1,8 @@
-from flask import Flask, request
+from flask import Flask
 
 app = Flask(__name__)
 
 @app.route('/')
-def index():
-    return "서버 연결 성공!"
+def home():
+    return '서버 잘 돌아감!'
 
-@app.route('/upload', methods=['POST'])
-def upload_image():
-    image = request.files['image']
-    print(f"[RECEIVED] {image.filename}")
-    return "이미지 수신 완료!"
