@@ -152,3 +152,74 @@ def delete_image():
 if __name__ == "__main__":
     # 로컬 테스트용(운영은 gunicorn 권장)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+
+def _list_images_sorted():
+    files = [f for f in os.listdir(UPLOAD_DIR) if f.lower().endswith(".jpg")]
+    files = [f for f in files if not _is_latest(f)]
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(UPLOAD_DIR, f)), reverse=True)
+    return files
+
+def _device_from_filename(fname: str) -> str:
+    # 저장 규칙: {device}_{ts}_{uuid}.jpg
+    try:
+        return fname.split("_", 1)[0]
+    except Exception:
+        return "unknown"
+
+def _device_list():
+    devices = sorted({ _device_from_filename(f) for f in _list_images_sorted() })
+    return devices
+
+@app.route("/gallery", methods=["GET"])
+def gallery():
+    # 장비 필터
+    device = request.args.get("device", "").strip()
+    try:
+        page = max(int(request.args.get("page", 1)), 1)
+    except ValueError:
+        page = 1
+    try:
+        size = min(max(int(request.args.get("size", 50)), 1), 200)
+    except ValueError:
+        size = 50
+
+    files = _list_images_sorted()
+    if device:
+        files = [f for f in files if _device_from_filename(f) == device]
+
+    total = len(files)
+    start = (page - 1) * size
+    end = start + size
+    page_files = files[start:end]
+
+    return render_template(
+        "gallery.html",
+        files=page_files,
+        page=page,
+        size=size,
+        total=total,
+        has_prev=page > 1,
+        has_next=end < total,
+        devices=_device_list(),
+        current_device=device
+    )
+
+@app.route("/gallery/split", methods=["GET"])
+def gallery_split():
+    # 장비별로 최신 N장씩 나눠서 한 화면에
+    try:
+        n = min(max(int(request.args.get("n", 30)), 1), 200)
+    except ValueError:
+        n = 30
+
+    files = _list_images_sorted()
+    groups = {}
+    for f in files:
+        d = _device_from_filename(f)
+        groups.setdefault(d, [])
+        if len(groups[d]) < n:
+            groups[d].append(f)
+    # 정렬: 장비명 알파벳순
+    ordered = [(d, groups[d]) for d in sorted(groups.keys())]
+
+    return render_template("gallery_split.html", groups=ordered, n=n)
