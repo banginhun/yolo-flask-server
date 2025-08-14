@@ -2,61 +2,81 @@
 <html>
 <head>
   <meta charset="utf-8" />
-  <title>Latest Frame</title>
+  <title>Latest Frames</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
-    header { display: flex; align-items: center; gap: 12px; }
-    img { max-width: 100%; height: auto; border: 1px solid #ddd; border-radius: 8px; }
-    .actions { margin: 12px 0; display: flex; gap: 8px; }
-    button, a.btn {
-      padding: 8px 12px; border: 1px solid #ccc; border-radius: 8px; background: #fff; text-decoration: none; color: #333;
-    }
-    button:hover, a.btn:hover { background: #f5f5f5; }
+    header { display: flex; align-items: center; justify-content: space-between; }
+    .row { display: grid; grid-template-columns: repeat(auto-fit,minmax(260px,1fr)); gap: 16px; margin-top: 16px; }
+    .card { border: 1px solid #ddd; border-radius: 8px; padding: 10px; background: #fff; }
+    img { width: 100%; height: auto; border-radius: 6px; border: 1px solid #eee; }
+    .actions { display: flex; gap: 8px; align-items: center; }
+    .btn, button { padding: 8px 12px; border: 1px solid #ccc; border-radius: 8px; background: #fff; text-decoration: none; color: #333; cursor: pointer; }
+    .btn:hover, button:hover { background: #f5f5f5; }
+    .muted { color:#666; font-size: 12px; }
   </style>
 </head>
 <body>
   <header>
-    <h2>최근 이미지</h2>
+    <h2>최근 이미지 모니터링</h2>
+    <div class="actions">
+      <a class="btn" href="/gallery">갤러리</a>
+      <label class="btn" style="display:inline-flex;gap:6px;align-items:center;">
+        <input type="checkbox" id="auto" onchange="toggleAuto(this.checked)"> 자동 새로고침(1초)
+      </label>
+      <button onclick="reloadAll()">새로고침</button>
+    </div>
   </header>
 
-  <div class="actions">
-    <button onclick="reloadLatest()">새로고침</button>
-    <a class="btn" href="/gallery">갤러리 보기</a>
-    <label style="display:inline-flex;align-items:center;gap:6px;">
-      <input type="checkbox" id="auto" onchange="toggleAuto(this.checked)"> 자동 새로고침(1초)
-    </label>
-  </div>
+  <div class="row">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong>전체 최신</strong><span class="muted">/uploads/latest_all.jpg</span>
+      </div>
+      {% if latest_all %}
+        <img id="latest_all" src="/uploads/{{ latest_all }}?t=0" alt="latest_all"/>
+      {% else %}
+        <p>아직 업로드된 이미지가 없습니다.</p>
+      {% endif %}
+    </div>
 
-  <div id="viewer">
-    {% if latest_file %}
-      <img id="img" src="/uploads/{{ latest_file }}?t={{ '%d'|format(0) }}" alt="latest"/>
-    {% else %}
-      <p>아직 업로드된 이미지가 없습니다.</p>
-    {% endif %}
+    {% for f in device_latest %}
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <strong>{{ f.replace('latest_', '').replace('.jpg','') }}</strong>
+        <span class="muted">/uploads/{{ f }}</span>
+      </div>
+      <img class="dev" data-src="/uploads/{{ f }}" src="/uploads/{{ f }}?t={{ loop.index }}" alt="{{ f }}">
+    </div>
+    {% endfor %}
   </div>
 
   <script>
-    let timer = null;
-    function bustCache(url){
+    function bust(url){
       const u = new URL(url, window.location.origin);
       u.searchParams.set('t', Date.now());
       return u.toString();
     }
-    function reloadLatest(){
-      const img = document.getElementById('img');
-      if(!img) return;
-      img.src = bustCache('/uploads/latest.jpg');
+    function reloadAll(){
+      const all = document.getElementById('latest_all');
+      if(all) all.src = bust('/uploads/latest_all.jpg');
+      document.querySelectorAll('img.dev').forEach(img=>{
+        const base = img.getAttribute('data-src');
+        img.src = bust(base);
+      });
     }
+    let timer = null;
     function toggleAuto(on){
       if(on){
-        timer = setInterval(reloadLatest, 1000);
+        if(timer) clearInterval(timer);
+        timer = setInterval(reloadAll, 1000);
       }else{
-        if(timer){ clearInterval(timer); timer = null; }
+        if(timer) clearInterval(timer);
+        timer = null;
       }
     }
-    // 첫 로드 시 최신화 한번
-    setTimeout(reloadLatest, 200);
+    // 최초 200ms 뒤 1회 갱신
+    setTimeout(reloadAll, 200);
   </script>
 </body>
 </html>
