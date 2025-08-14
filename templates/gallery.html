@@ -7,11 +7,13 @@
   <style>
     body { font-family: system-ui, Arial, sans-serif; margin: 16px; }
     header { display: flex; align-items: center; justify-content: space-between; }
+    .tabs { display:flex; gap:8px; flex-wrap:wrap; margin-top:12px; }
+    .tab { padding:6px 10px; border:1px solid #ccc; border-radius:8px; text-decoration:none; color:#333; }
+    .tab.active { background:#333; color:#fff; border-color:#333; }
     .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; margin-top: 16px; }
     .card { border: 1px solid #ddd; border-radius: 8px; overflow: hidden; background: #fff; }
     .card img { width: 100%; height: auto; display: block; }
     .card .meta { padding: 8px 10px; font-size: 12px; display:flex; align-items:center; justify-content:space-between; gap:8px; }
-    .actions { display: flex; gap: 6px; align-items: center; }
     .btn, button { padding: 6px 10px; border: 1px solid #ccc; border-radius: 8px; background: #fff; text-decoration: none; color: #333; cursor:pointer; }
     .btn:hover, button:hover { background: #f5f5f5; }
     .pager { margin-top: 16px; display: flex; gap: 8px; align-items:center; }
@@ -21,10 +23,18 @@
 <body>
   <header>
     <h2>갤러리</h2>
-    <div class="actions">
+    <div>
       <a class="btn" href="/">최근 이미지</a>
+      <a class="btn" href="/gallery/split">스플릿 뷰</a>
     </div>
   </header>
+
+  <div class="tabs">
+    <a class="tab {{ '' == current_device and 'active' or '' }}" href="{{ url_for('gallery', page=1, size=size) }}">전체</a>
+    {% for d in devices %}
+      <a class="tab {{ d == current_device and 'active' or '' }}" href="{{ url_for('gallery', page=1, size=size, device=d) }}">{{ d }}</a>
+    {% endfor %}
+  </div>
 
   {% if files|length == 0 %}
     <p>이미지가 없습니다.</p>
@@ -49,11 +59,11 @@
 
   <div class="pager">
     {% if has_prev %}
-      <a class="btn" href="{{ url_for('gallery', page=page-1, size=size) }}">◀ 이전</a>
+      <a class="btn" href="{{ url_for('gallery', page=page-1, size=size, device=current_device) }}">◀ 이전</a>
     {% endif %}
     <span class="muted">page {{ page }} / {{ (total + size - 1) // size if size else 1 }} · 총 {{ total }}장</span>
     {% if has_next %}
-      <a class="btn" href="{{ url_for('gallery', page=page+1, size=size) }}">다음 ▶</a>
+      <a class="btn" href="{{ url_for('gallery', page=page+1, size=size, device=current_device) }}">다음 ▶</a>
     {% endif %}
   </div>
 </body>
