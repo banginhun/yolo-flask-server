@@ -3,12 +3,20 @@ import os, uuid, time
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 from collections import deque
+from io import BytesIO
 
 from flask import (
     Flask, request, abort, send_from_directory,
     render_template, render_template_string, jsonify, redirect, url_for
 )
 from werkzeug.utils import secure_filename
+
+# Pillow(이미지 오버레이용)
+try:
+    from PIL import Image, ImageDraw, ImageFont
+    PIL_AVAILABLE = True
+except Exception:
+    PIL_AVAILABLE = False
 
 # ---------- 기본 설정 ----------
 BASE_DIR   = os.path.dirname(os.path.abspath(__file__))
@@ -18,12 +26,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
-# 환경 변수(필요시 Render 대시보드에 설정)
+# 환경 변수
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "example-secret")  # 라파/마스터와 동일하게
 MAX_KEEP   = int(os.environ.get("MAX_KEEP", "2000"))         # 보관 최대 개수
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024          # 10MB 업로드 제한
 
-# ---------- 제어 큐(START/STOP) ----------
+# ---------- 제어 큐 ----------
 cmd_q = deque()  # 서버 메모리 내 간단 큐
 
 # ---------- 유틸 ----------
@@ -52,7 +60,6 @@ def _list_images_sorted():
     return files
 
 def _device_from_filename(fname: str) -> str:
-    """저장 규칙: {device}_{ts}_{uuid}.jpg → device 파싱"""
     try:
         return fname.split("_", 1)[0]
     except Exception:
@@ -71,10 +78,43 @@ def _prune_if_needed():
         except Exception:
             pass
 
+def _overlay_frame_idx(jpg_bytes: bytes, text: str) -> bytes:
+    """프레임 번호 텍스트를 이미지에 오버레이"""
+    if not PIL_AVAILABLE or not text:
+        return jpg_bytes
+    try:
+        im = Image.open(BytesIO(jpg_bytes)).convert("RGB")
+        W, H = im.size
+        draw = ImageDraw.Draw(im)
+
+        base = max(min(W, H), 1)
+        font_size = max(int(base * 0.045), 16)
+        pad = max(int(font_size * 0.4), 6)
+
+        try:
+            font = ImageFont.load_default()
+        except Exception:
+            font = None
+
+        if font is not None:
+            tw, th = draw.textbbox((0, 0), text, font=font)[2:]
+        else:
+            tw, th = draw.textlength(text), font_size
+
+        x, y = pad, pad
+        box = [x - pad, y - pad, x + tw + pad, y + th + pad]
+        draw.rectangle(box, fill=(0, 0, 0, 180))
+        draw.text((x, y), text, fill=(255, 255, 255), font=font)
+
+        out = BytesIO()
+        im.save(out, format="JPEG", quality=90)
+        return out.getvalue()
+    except Exception:
+        return jpg_bytes
+
 # ---------- 페이지 ----------
 @app.route("/", methods=["GET"])
 def index():
-    # 전체 최신 + 장비별 최신 목록
     latest_all = "latest_all.jpg" if os.path.exists(os.path.join(UPLOAD_DIR, "latest_all.jpg")) else None
     device_latest = []
     for f in os.listdir(UPLOAD_DIR):
@@ -118,12 +158,10 @@ def gallery():
 
 @app.route("/gallery/split", methods=["GET"])
 def gallery_split():
-    # 장비별 최신 n장씩 칼럼으로
     try:
         n = min(max(int(request.args.get("n", 30)), 1), 200)
     except ValueError:
         n = 30
-
     files = _list_images_sorted()
     groups = {}
     for f in files:
@@ -131,11 +169,10 @@ def gallery_split():
         groups.setdefault(d, [])
         if len(groups[d]) < n:
             groups[d].append(f)
-
     ordered = [(d, groups[d]) for d in sorted(groups.keys())]
     return render_template("gallery_split.html", groups=ordered, n=n)
 
-# ---------- 업로드/다운로드/관리 ----------
+# ---------- 업로드 ----------
 @app.route("/api/recent", methods=["GET"])
 def api_recent():
     limit = min(int(request.args.get("limit", 100)), 1000)
@@ -156,27 +193,39 @@ def serve_upload(filename):
 
 @app.route("/upload", methods=["POST"])
 def upload():
-    # 간단 인증(옵션)
     if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
         abort(401)
-
     if "image" not in request.files:
         abort(400, "no image")
-
-    # 바이트로 읽어 한 번만 디스크 쓰기
     raw = request.files["image"].read()
 
     ts = request.form.get("ts") or datetime.utcnow().isoformat(timespec="milliseconds") + "Z"
-    device = (request.headers.get("X-Device-Id") or "unknown").strip() or "unknown"
+    device = (request.headers.get("X-Device-Id") or request.headers.get("X-Cam-Id") or "unknown").strip() or "unknown"
 
-    # 고유 파일명(동시 업로드 충돌 방지)
-    fname = _safe_name(f"{device}_{ts}_{uuid.uuid4().hex[:8]}")
+    frame_idx = request.form.get("frame_idx") or request.headers.get("X-Frame-Idx")
+    try:
+        frame_idx = str(int(frame_idx))
+    except Exception:
+        frame_idx = None
+
+    overlay_flag = (request.form.get("overlay_frame") or request.headers.get("X-Overlay-Frame") or "").strip().lower()
+    overlay = overlay_flag in ("1", "true", "yes", "y")
+
+    if frame_idx is not None:
+        stem = f"{device}_{ts}_f{frame_idx}_{uuid.uuid4().hex[:8]}"
+    else:
+        stem = f"{device}_{ts}_{uuid.uuid4().hex[:8]}"
+    fname = _safe_name(stem)
     save_path = os.path.join(UPLOAD_DIR, fname)
-    _atomic_write_bytes(save_path, raw)
 
-    # latest 갱신(전체/장비별)
-    _atomic_write_bytes(os.path.join(UPLOAD_DIR, "latest_all.jpg"), raw)
-    _atomic_write_bytes(os.path.join(UPLOAD_DIR, f"latest_{device}.jpg"), raw)
+    to_write = raw
+    if overlay and frame_idx is not None:
+        to_write = _overlay_frame_idx(raw, f"f{frame_idx}")
+
+    _atomic_write_bytes(save_path, to_write)
+
+    _atomic_write_bytes(os.path.join(UPLOAD_DIR, "latest_all.jpg"), to_write)
+    _atomic_write_bytes(os.path.join(UPLOAD_DIR, f"latest_{device}.jpg"), to_write)
 
     _prune_if_needed()
     return ("", 204)
@@ -193,11 +242,10 @@ def delete_image():
         os.remove(p)
     return redirect(url_for("gallery"))
 
-# ---------- START/STOP 제어 (마스터 라파 폴링용) ----------
+# ---------- START/STOP 제어 ----------
 @app.get("/control_panel")
 def control_panel():
     if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
-        # 패널 자체도 토큰 헤더 필요하도록(원하면 제거 가능)
         abort(401)
     return render_template_string("""
 <!doctype html><meta charset="utf-8">
@@ -218,7 +266,6 @@ async function send(cmd){
 
 @app.post("/control")
 def control():
-    # Render의 버튼/외부 HTTP가 명령 적재
     if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
         abort(401)
     data = request.get_json(silent=True) or {}
@@ -230,7 +277,6 @@ def control():
 
 @app.get("/pop_cmd")
 def pop_cmd():
-    # 마스터 라파가 1초마다 폴링
     if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
         abort(401)
     if cmd_q:
@@ -239,5 +285,4 @@ def pop_cmd():
 
 # ---------- 엔트리 ----------
 if __name__ == "__main__":
-    # 로컬 테스트용(운영은 gunicorn 사용 권장)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
