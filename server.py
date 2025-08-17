@@ -2,9 +2,11 @@
 import os, uuid, time
 from datetime import datetime
 from tempfile import NamedTemporaryFile
+from collections import deque
+
 from flask import (
     Flask, request, abort, send_from_directory,
-    render_template, jsonify, redirect, url_for
+    render_template, render_template_string, jsonify, redirect, url_for
 )
 from werkzeug.utils import secure_filename
 
@@ -17,9 +19,12 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
 # 환경 변수(필요시 Render 대시보드에 설정)
-AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "example-secret")  # 라파와 동일하게
+AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "example-secret")  # 라파/마스터와 동일하게
 MAX_KEEP   = int(os.environ.get("MAX_KEEP", "2000"))         # 보관 최대 개수
 app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024          # 10MB 업로드 제한
+
+# ---------- 제어 큐(START/STOP) ----------
+cmd_q = deque()  # 서버 메모리 내 간단 큐
 
 # ---------- 유틸 ----------
 def _safe_name(stem: str) -> str:
@@ -54,7 +59,7 @@ def _device_from_filename(fname: str) -> str:
         return "unknown"
 
 def _device_list():
-    return sorted({ _device_from_filename(f) for f in _list_images_sorted() })
+    return sorted({_device_from_filename(f) for f in _list_images_sorted()})
 
 def _prune_if_needed():
     files = _list_images_sorted()
@@ -66,7 +71,7 @@ def _prune_if_needed():
         except Exception:
             pass
 
-# ---------- 라우트 ----------
+# ---------- 페이지 ----------
 @app.route("/", methods=["GET"])
 def index():
     # 전체 최신 + 장비별 최신 목록
@@ -130,6 +135,7 @@ def gallery_split():
     ordered = [(d, groups[d]) for d in sorted(groups.keys())]
     return render_template("gallery_split.html", groups=ordered, n=n)
 
+# ---------- 업로드/다운로드/관리 ----------
 @app.route("/api/recent", methods=["GET"])
 def api_recent():
     limit = min(int(request.args.get("limit", 100)), 1000)
@@ -187,6 +193,51 @@ def delete_image():
         os.remove(p)
     return redirect(url_for("gallery"))
 
+# ---------- START/STOP 제어 (마스터 라파 폴링용) ----------
+@app.get("/control_panel")
+def control_panel():
+    if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
+        # 패널 자체도 토큰 헤더 필요하도록(원하면 제거 가능)
+        abort(401)
+    return render_template_string("""
+<!doctype html><meta charset="utf-8">
+<h3>라파 동기 캡처 컨트롤</h3>
+<button onclick="send('START')">START</button>
+<button onclick="send('STOP')">STOP</button>
+<script>
+async function send(cmd){
+  const r = await fetch('/control', {
+    method:'POST',
+    headers:{'Content-Type':'application/json','X-Auth-Token':'{{token}}'},
+    body: JSON.stringify({cmd})
+  });
+  alert(cmd + ' sent: ' + r.status);
+}
+</script>
+""", token=AUTH_TOKEN)
+
+@app.post("/control")
+def control():
+    # Render의 버튼/외부 HTTP가 명령 적재
+    if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
+        abort(401)
+    data = request.get_json(silent=True) or {}
+    cmd = (data.get("cmd") or "").upper()
+    if cmd not in ("START", "STOP"):
+        abort(400, "bad cmd")
+    cmd_q.append({"cmd": cmd, "ts": time.time()})
+    return jsonify(ok=True)
+
+@app.get("/pop_cmd")
+def pop_cmd():
+    # 마스터 라파가 1초마다 폴링
+    if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
+        abort(401)
+    if cmd_q:
+        return jsonify(cmd_q.popleft())
+    return jsonify({"cmd": "NONE"})
+
+# ---------- 엔트리 ----------
 if __name__ == "__main__":
     # 로컬 테스트용(운영은 gunicorn 사용 권장)
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
