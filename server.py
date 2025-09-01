@@ -400,3 +400,39 @@ except NameError:
 # ---------- 엔트리 ----------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
+# ==== [APPEND] latest per side (left/right) ===============================
+from pathlib import Path
+import csv, time
+from flask import jsonify
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_ROOT = BASE_DIR / "static" / "uploads"
+LOG_CSV = UPLOAD_ROOT / "frames_log.csv"
+
+@app.get("/latest-json")
+def latest_json():
+    latest = {"left": None, "right": None, "unknown": None}
+    if LOG_CSV.exists():
+        with LOG_CSV.open("r", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        # 최신순
+        rows.sort(key=lambda r: int(r["recv_ts_ms"]), reverse=True)
+        for r in rows:
+            side = r["cam_side"]
+            item = {
+                "cam_id": r["cam_id"],
+                "frame_idx": int(r["frame_idx"]),
+                "recv_ts_ms": int(r["recv_ts_ms"]),
+                "time": time.strftime("%H:%M:%S", time.localtime(int(r["recv_ts_ms"])/1000.0)),
+                "url": "/static/uploads/" + r["rel_path"],
+            }
+            if side in ("left", "right"):
+                if latest[side] is None:
+                    latest[side] = item
+            else:
+                if latest["unknown"] is None:
+                    latest["unknown"] = item
+            if latest["left"] and latest["right"] and latest["unknown"]:
+                break
+    return jsonify({"ok": True, "latest": latest})
+# ==== [END APPEND] ========================================================
