@@ -283,6 +283,120 @@ def pop_cmd():
         return jsonify(cmd_q.popleft())
     return jsonify({"cmd": "NONE"})
 
+# ==== [APPEND ONLY] dual-cam upload & recent preview =========================
+from flask import Blueprint, request, jsonify, render_template, send_from_directory
+from pathlib import Path
+import csv, time, uuid, os
+
+recent_bp = Blueprint("recent_bp", __name__, template_folder="templates", static_folder="static")
+
+BASE_DIR = Path(__file__).resolve().parent
+UPLOAD_ROOT = BASE_DIR / "static" / "uploads"
+UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+LOG_CSV = UPLOAD_ROOT / "frames_log.csv"
+
+# 로그 헤더 생성(최초 1회)
+if not LOG_CSV.exists():
+    with LOG_CSV.open("w", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow(["recv_ts_ms","cam_id","cam_side","frame_idx","shot_ts_ns","sent_ts_ms","uuid","rel_path"])
+
+def _safe_side(s: str) -> str:
+    s = (s or "").lower().strip()
+    return "left" if s == "left" else "right" if s == "right" else "unknown"
+
+@recent_bp.route("/upload", methods=["POST"])
+def upload_frame():
+    """
+    멀티파트 필드:
+      image: 파일 (jpeg/png)
+      cam_id: RPI 식별자 (예: RPI5_A)
+      cam_side: left | right  (한 Pi의 두 카메라 구분)
+      frame_idx: 정수(0,1,2…)
+      shot_ts_ns: 센서 타임스탬프(ns) - 선택
+      sent_ts_ms: 전송 시각(ms) - 선택
+      uuid: 선택(없으면 서버 생성)
+    """
+    if "image" not in request.files:
+        return jsonify({"ok": False, "error": "image required"}), 400
+
+    image = request.files["image"]
+    cam_id = request.form.get("cam_id", "RPI5")
+    cam_side = _safe_side(request.form.get("cam_side"))
+    frame_idx = int(request.form.get("frame_idx", -1))
+    shot_ts_ns = int(request.form.get("shot_ts_ns", 0))
+    sent_ts_ms = int(request.form.get("sent_ts_ms", 0))
+    uuid_str = request.form.get("uuid") or str(uuid.uuid4())
+
+    day = time.strftime("%Y%m%d")
+    save_dir = UPLOAD_ROOT / cam_id / cam_side / day
+    save_dir.mkdir(parents=True, exist_ok=True)
+
+    recv_ts_ms = int(time.time() * 1000)
+    base_name = f"{frame_idx if frame_idx>=0 else recv_ts_ms}_{uuid_str}.jpg"
+    save_path = save_dir / base_name
+    image.save(save_path)
+
+    rel_path = str(save_path.relative_to(UPLOAD_ROOT).as_posix())
+    with LOG_CSV.open("a", newline="", encoding="utf-8") as f:
+        csv.writer(f).writerow([recv_ts_ms, cam_id, cam_side, frame_idx, shot_ts_ns, sent_ts_ms, uuid_str, rel_path])
+
+    return jsonify({"ok": True, "saved": rel_path, "recv_ts_ms": recv_ts_ms})
+
+@recent_bp.route("/recent")
+def recent_page():
+    """
+    최근 업로드 프레임을 좌/우로 나눠서 미리보기.
+    쿼리: ?n=30 (기본 30)
+    """
+    n = int(request.args.get("n", 30))
+    rows = []
+    if LOG_CSV.exists():
+        with LOG_CSV.open("r", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+    rows.sort(key=lambda r: int(r["recv_ts_ms"]), reverse=True)
+
+    left_items, right_items, unknown_items = [], [], []
+    for r in rows:
+        item = {
+            "recv_ts_ms": int(r["recv_ts_ms"]),
+            "cam_id": r["cam_id"],
+            "cam_side": r["cam_side"],
+            "frame_idx": int(r["frame_idx"]),
+            "shot_ts_ns": int(r["shot_ts_ns"]),
+            "sent_ts_ms": int(r["sent_ts_ms"]),
+            "uuid": r["uuid"],
+            "rel_path": r["rel_path"],
+            "url": "/static/uploads/" + r["rel_path"],
+            "recv_hhmmss": time.strftime("%H:%M:%S", time.localtime(int(r["recv_ts_ms"]) / 1000.0)),
+        }
+        if r["cam_side"] == "left":
+            left_items.append(item)
+        elif r["cam_side"] == "right":
+            right_items.append(item)
+        else:
+            unknown_items.append(item)
+
+    return render_template(
+        "recent.html",
+        left_items=left_items[:n],
+        right_items=right_items[:n],
+        unknown_items=unknown_items[: max(0, n // 2)],
+        total=len(rows),
+    )
+
+@recent_bp.route("/static/uploads/<path:filename>")
+def serve_uploaded(filename):
+    return send_from_directory(UPLOAD_ROOT, filename, as_attachment=False)
+
+# 앱 인스턴스가 이미 있다면 거기에 등록, 없다면 임시 앱 생성(로컬 테스트용)
+try:
+    app.register_blueprint(recent_bp)
+except NameError:
+    from flask import Flask
+    app = Flask(__name__)
+    app.register_blueprint(recent_bp)
+
+
 # ---------- 엔트리 ----------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
