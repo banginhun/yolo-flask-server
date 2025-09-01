@@ -46,3 +46,38 @@ img{width:100%;height:auto;border-radius:8px;display:block}.pill{display:inline-
 </div>
 {% endif %}
 </body></html>
+<div id="latest-wrap">
+  <h3>좌/우 최신</h3>
+  <div style="display:flex;gap:16px;flex-wrap:wrap">
+    <div>
+      <div>Left</div>
+      <img id="img-left" src="" style="max-width:420px;border:1px solid #ddd;border-radius:8px">
+      <div id="meta-left" style="font-size:12px;color:#555;margin-top:4px"></div>
+    </div>
+    <div>
+      <div>Right</div>
+      <img id="img-right" src="" style="max-width:420px;border:1px solid #ddd;border-radius:8px">
+      <div id="meta-right" style="font-size:12px;color:#555;margin-top:4px"></div>
+    </div>
+  </div>
+</div>
+<script>
+async function refreshLatest(){
+  try{
+    const r = await fetch('/latest-json');
+    const j = await r.json();
+    const L = j.latest.left, R = j.latest.right;
+    if(L){ 
+      document.getElementById('img-left').src = L.url + `?t=${Date.now()}`;
+      document.getElementById('meta-left').textContent = `cam:${L.cam_id} frame:${L.frame_idx} recv:${L.time}`;
+    }
+    if(R){
+      document.getElementById('img-right').src = R.url + `?t=${Date.now()}`;
+      document.getElementById('meta-right').textContent = `cam:${R.cam_id} frame:${R.frame_idx} recv:${R.time}`;
+    }
+  }catch(e){ console.log(e); }
+}
+setInterval(refreshLatest, 1000);
+refreshLatest();
+</script>
+
