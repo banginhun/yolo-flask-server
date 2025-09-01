@@ -99,3 +99,21 @@
   </script>
 </body>
 </html>
+async function refreshLatest(){
+  try{
+    const r = await fetch('/latest-json');
+    const j = await r.json();
+    const L = j.latest.left, R = j.latest.right;
+    if(L){ 
+      document.getElementById('img-left').src = L.url + `?t=${Date.now()}`;
+      document.getElementById('meta-left').textContent = `cam:${L.cam_id} frame:${L.frame_idx} recv:${L.time}`;
+    }
+    if(R){
+      document.getElementById('img-right').src = R.url + `?t=${Date.now()}`;
+      document.getElementById('meta-right').textContent = `cam:${R.cam_id} frame:${R.frame_idx} recv:${R.time}`;
+    }
+  }catch(e){ console.log(e); }
+}
+setInterval(refreshLatest, 1000);
+refreshLatest();
+</script>
