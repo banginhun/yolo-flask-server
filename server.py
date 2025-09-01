@@ -1,15 +1,14 @@
-import os, uuid, time
+# server.py
+import os, uuid, time, csv
 from datetime import datetime
 from tempfile import NamedTemporaryFile
 from collections import deque
 from io import BytesIO
-import csv
 from pathlib import Path
 
 from flask import (
     Flask, request, abort, send_from_directory,
-    render_template, render_template_string, jsonify, redirect, url_for,
-    Blueprint
+    render_template, render_template_string, jsonify, redirect, url_for, Blueprint
 )
 from werkzeug.utils import secure_filename
 
@@ -31,7 +30,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 # 환경 변수
 AUTH_TOKEN = os.environ.get("AUTH_TOKEN", "example-secret")  # 라파/마스터와 동일하게
 MAX_KEEP   = int(os.environ.get("MAX_KEEP", "2000"))         # 보관 최대 개수
-app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024           # 10MB 업로드 제한
+app.config["MAX_CONTENT_LENGTH"] = 10 * 1024 * 1024          # 10MB 업로드 제한
 
 # ---------- 제어 큐 ----------
 cmd_q = deque()  # 서버 메모리 내 간단 큐
@@ -101,10 +100,11 @@ def _overlay_frame_idx(jpg_bytes: bytes, text: str) -> bytes:
         if font is not None:
             tw, th = draw.textbbox((0, 0), text, font=font)[2:]
         else:
-            tw, th = draw.textlength(text), font_size
+            # fallback 추정
+            tw, th = len(text) * font_size * 0.6, font_size
 
         x, y = pad, pad
-        box = [x - pad, y - pad, x + tw + pad, y + th + pad]
+        box = [x - pad, y - pad, x + int(tw) + pad, y + int(th) + pad]
         draw.rectangle(box, fill=(0, 0, 0, 180))
         draw.text((x, y), text, fill=(255, 255, 255), font=font)
 
@@ -114,7 +114,7 @@ def _overlay_frame_idx(jpg_bytes: bytes, text: str) -> bytes:
     except Exception:
         return jpg_bytes
 
-# ---------- 페이지 (기본) ----------
+# ---------- 페이지 ----------
 @app.route("/", methods=["GET"])
 def index():
     latest_all = "latest_all.jpg" if os.path.exists(os.path.join(UPLOAD_DIR, "latest_all.jpg")) else None
@@ -174,7 +174,7 @@ def gallery_split():
     ordered = [(d, groups[d]) for d in sorted(groups.keys())]
     return render_template("gallery_split.html", groups=ordered, n=n)
 
-# ---------- API (기본) ----------
+# ---------- 업로드(기존) ----------
 @app.route("/api/recent", methods=["GET"])
 def api_recent():
     limit = min(int(request.args.get("limit", 100)), 1000)
@@ -232,18 +232,6 @@ def upload():
     _prune_if_needed()
     return ("", 204)
 
-@app.route("/delete", methods=["POST"])
-def delete_image():
-    if AUTH_TOKEN and request.headers.get("X-Auth-Token") != AUTH_TOKEN:
-        abort(401)
-    name = request.form.get("file")
-    if not name:
-        abort(400, "no file")
-    p = os.path.join(UPLOAD_DIR, os.path.basename(name))
-    if os.path.isfile(p) and not _is_latest(os.path.basename(p)):
-        os.remove(p)
-    return redirect(url_for("gallery"))
-
 # ---------- START/STOP 제어 ----------
 @app.get("/control_panel")
 def control_panel():
@@ -285,17 +273,16 @@ def pop_cmd():
         return jsonify(cmd_q.popleft())
     return jsonify({"cmd": "NONE"})
 
-# ==== [START] DUAL-CAM & RECENT PREVIEW BLUEPRINT =========================
+# ---------- Dual-cam 확장: /upload2 + /recent + /latest-json ----------
 recent_bp = Blueprint("recent_bp", __name__, template_folder="templates", static_folder="static")
 
-# Blueprint용 설정 (기존 UPLOAD_DIR과 다른 경로를 사용하지 않으므로 UPLOAD_ROOT 재정의)
-UPLOAD_ROOT_BP = Path(UPLOAD_DIR) # os.path.join을 Path 객체로 변환
-LOG_CSV = UPLOAD_ROOT_BP / "frames_log.csv"
-
-# 로그 헤더 생성(최초 1회)
+BASE_PATH = Path(__file__).resolve().parent
+D_UPLOAD_ROOT = BASE_PATH / "static" / "uploads"
+D_UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
+LOG_CSV = D_UPLOAD_ROOT / "frames_log.csv"
 if not LOG_CSV.exists():
     with LOG_CSV.open("w", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow(["recv_ts_ms", "cam_id", "cam_side", "frame_idx", "shot_ts_ns", "sent_ts_ms", "uuid", "rel_path"])
+        csv.writer(f).writerow(["recv_ts_ms","cam_id","cam_side","frame_idx","shot_ts_ns","sent_ts_ms","uuid","rel_path"])
 
 def _safe_side(s: str) -> str:
     s = (s or "").lower().strip()
@@ -305,7 +292,6 @@ def _safe_side(s: str) -> str:
 def upload2():
     if "image" not in request.files:
         return jsonify({"ok": False, "error": "image required"}), 400
-    
     image = request.files["image"]
     cam_id = request.form.get("cam_id", "RPI5")
     cam_side = _safe_side(request.form.get("cam_side"))
@@ -315,20 +301,16 @@ def upload2():
     uuid_str = request.form.get("uuid") or str(uuid.uuid4())
 
     day = time.strftime("%Y%m%d")
-    save_dir = UPLOAD_ROOT_BP / cam_id / cam_side / day
+    save_dir = D_UPLOAD_ROOT / cam_id / cam_side / day
     save_dir.mkdir(parents=True, exist_ok=True)
-    
     recv_ts_ms = int(time.time() * 1000)
     base_name = f"{frame_idx if frame_idx>=0 else recv_ts_ms}_{uuid_str}.jpg"
     save_path = save_dir / base_name
     image.save(save_path)
 
-    # rel_path 계산 시 UPLOAD_DIR 기준으로 변경
-    rel_path = str(save_path.relative_to(UPLOAD_ROOT_BP).as_posix())
-    
+    rel_path = str(save_path.relative_to(D_UPLOAD_ROOT).as_posix())
     with LOG_CSV.open("a", newline="", encoding="utf-8") as f:
         csv.writer(f).writerow([recv_ts_ms, cam_id, cam_side, frame_idx, shot_ts_ns, sent_ts_ms, uuid_str, rel_path])
-    
     return jsonify({"ok": True, "saved": rel_path, "recv_ts_ms": recv_ts_ms}), 200
 
 @recent_bp.route("/recent")
@@ -339,7 +321,6 @@ def recent_page():
         with LOG_CSV.open("r", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
     rows.sort(key=lambda r: int(r["recv_ts_ms"]), reverse=True)
-    
     left, right, unk = [], [], []
     for r in rows:
         item = {
@@ -351,16 +332,14 @@ def recent_page():
             "sent_ts_ms": int(r["sent_ts_ms"]),
             "uuid": r["uuid"],
             "rel_path": r["rel_path"],
-            # url_for를 사용하여 URL 생성
-            "url": url_for("serve_upload", filename=r["rel_path"]),
+            "url": "/static/uploads/" + r["rel_path"],
             "recv_hhmmss": time.strftime("%H:%M:%S", time.localtime(int(r["recv_ts_ms"])/1000.0)),
         }
         (left if r["cam_side"]=="left" else right if r["cam_side"]=="right" else unk).append(item)
-        
     return render_template("recent.html", left_items=left[:n], right_items=right[:n], unknown_items=unk[:max(0, n//2)], total=len(rows))
 
-@recent_bp.route("/latest-json")
-def latest_json_bp():
+@app.get("/latest-json")
+def latest_json():
     latest = {"left": None, "right": None, "unknown": None}
     if LOG_CSV.exists():
         with LOG_CSV.open("r", encoding="utf-8") as f:
@@ -373,21 +352,24 @@ def latest_json_bp():
                 "frame_idx": int(r["frame_idx"]),
                 "recv_ts_ms": int(r["recv_ts_ms"]),
                 "time": time.strftime("%H:%M:%S", time.localtime(int(r["recv_ts_ms"])/1000.0)),
-                "url": url_for("serve_upload", filename=r["rel_path"])
+                "url": "/static/uploads/" + r["rel_path"]
             }
-            if side in ("left", "right"):
-                if latest[side] is None: latest[side] = item
+            if side in ("left","right"):
+                if latest[side] is None:
+                    latest[side] = item
             else:
-                if latest["unknown"] is None: latest["unknown"] = item
-            if latest["left"] and latest["right"]: break
-            
+                if latest["unknown"] is None:
+                    latest["unknown"] = item
+            if latest["left"] and latest["right"]:
+                break
     return jsonify({"ok": True, "latest": latest})
 
-# Blueprint 등록
+@recent_bp.route("/static/uploads/<path:filename>")
+def serve_uploaded(filename):
+    return send_from_directory(D_UPLOAD_ROOT, filename, as_attachment=False)
+
 app.register_blueprint(recent_bp)
-# ==== [END] DUAL-CAM & RECENT PREVIEW BLUEPRINT ===========================
 
-
-# ---------- 엔트리 포인트 ----------
+# ---------- 엔트리 ----------
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", "5000")))
