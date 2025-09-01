@@ -1,0 +1,48 @@
+<!doctype html><html lang="ko"><head>
+<meta charset="utf-8"><title>Recent Frames</title>
+<style>
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;margin:16px}
+h2{margin-top:24px}.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:12px}
+.card{border:1px solid #ddd;border-radius:10px;padding:8px}.meta{font-size:12px;color:#555;line-height:1.2;margin-top:6px}
+img{width:100%;height:auto;border-radius:8px;display:block}.pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px}
+.left{background:#e6f4ff;color:#084b83}.right{background:#ffe9e6;color:#7a2100}.unknown{background:#eee;color:#444}
+.toolbar{display:flex;gap:12px;align-items:center;margin-bottom:8px}
+</style>
+</head><body>
+<div class="toolbar"><h1 style="margin:0;">Recent Frames</h1><div style="color:#666;">총 로그: {{ total }} rows</div></div>
+<h2>Left</h2><div class="grid">
+{% for it in left_items %}
+  <div class="card">
+    <img src="{{ it.url }}" loading="lazy" alt="left frame">
+    <div class="meta"><span class="pill left">left</span>
+      cam_id={{ it.cam_id }}<br>frame={{ it.frame_idx }} • recv={{ it.recv_hhmmss }}<br>
+      shot_ns={{ it.shot_ts_ns }}<br>sent_ms={{ it.sent_ts_ms }}<br>uuid={{ it.uuid }}
+    </div>
+  </div>
+{% endfor %}
+</div>
+<h2>Right</h2><div class="grid">
+{% for it in right_items %}
+  <div class="card">
+    <img src="{{ it.url }}" loading="lazy" alt="right frame">
+    <div class="meta"><span class="pill right">right</span>
+      cam_id={{ it.cam_id }}<br>frame={{ it.frame_idx }} • recv={{ it.recv_hhmmss }}<br>
+      shot_ns={{ it.shot_ts_ns }}<br>sent_ms={{ it.sent_ts_ms }}<br>uuid={{ it.uuid }}
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% if unknown_items and unknown_items|length > 0 %}
+<h2>Unknown</h2><div class="grid">
+{% for it in unknown_items %}
+  <div class="card">
+    <img src="{{ it.url }}" loading="lazy" alt="unknown frame">
+    <div class="meta"><span class="pill unknown">unknown</span>
+      cam_id={{ it.cam_id }}<br>frame={{ it.frame_idx }} • recv={{ it.recv_hhmmss }}<br>
+      shot_ns={{ it.shot_ts_ns }}<br>sent_ms={{ it.sent_ts_ms }}<br>uuid={{ it.uuid }}
+    </div>
+  </div>
+{% endfor %}
+</div>
+{% endif %}
+</body></html>
